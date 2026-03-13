@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  bibliometrics-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bibliometrics_ai_analyzer
+    ports:
+      - "8501:8501"
+    volumes:
+      # Persiste datos descargados y reportes generados fuera del container
+      - ./data:/app/data
+      - ./docs:/app/docs
+    environment:
+      - PYTHONUNBUFFERED=1
+      - STREAMLIT_SERVER_PORT=8501
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  bibliometrics_data:
+    driver: local
+
+networks:
+  default:
+    name: bibliometrics_network
