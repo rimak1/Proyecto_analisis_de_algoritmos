@@ -59,6 +59,14 @@ DATA_SOURCES = {
         "enabled": True,
         "uiq_library": True,
     },
+    "ebsco": {
+        "name": "EBSCO Discovery (Biblioteca UniQ)",
+        "base_url": "https://search.ebscohost.com/login.aspx",
+        "proxy_url": "https://login.crai.referencistas.com/login?url=",
+        "custid": "ns004363",
+        "enabled": True,
+        "uiq_library": True,
+    },
     # ── Fuentes complementarias ────────────────────────────────────────────────
     "crossref": {
         "name": "CrossRef",

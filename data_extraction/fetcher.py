@@ -608,6 +608,7 @@ class DataFetcher:
             "acm": self.fetch_acm,
             "sage": self.fetch_sage,
             "sciencedirect": self.fetch_sciencedirect,
+            "ebsco": self.fetch_ebsco,
             "crossref": self.fetch_crossref,
             "semantic_scholar": self.fetch_semantic_scholar,
         }
@@ -635,6 +636,102 @@ class DataFetcher:
             out_path = RAW_DIR / f"{source_name}_raw.csv"
             df.to_csv(out_path, index=False, encoding="utf-8")
             logger.info(f"Guardado: {out_path} ({len(df)} registros)")
+
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ── Fuente 6: EBSCO Discovery (Biblioteca UIQ — scraping directo) ────
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def fetch_ebsco(self) -> pd.DataFrame:
+        """
+        Extrae artículos de EBSCO EDS usando Playwright en un subproceso.
+
+        Playwright no puede ejecutarse dentro del event loop de Streamlit
+        en Windows (NotImplementedError en asyncio). Se lanza como subproceso
+        con logs en tiempo real en la terminal de Streamlit.
+        """
+        import subprocess
+        import sys
+
+        try:
+            from data_extraction.ebsco_scraper import PLAYWRIGHT_AVAILABLE
+            if not PLAYWRIGHT_AVAILABLE:
+                logger.warning(
+                    "Playwright no instalado. "
+                    "Ejecute: pip install playwright && playwright install chromium"
+                )
+                return pd.DataFrame(columns=STANDARD_COLUMNS)
+        except ImportError:
+            logger.warning("ebsco_scraper no disponible.")
+            return pd.DataFrame(columns=STANDARD_COLUMNS)
+
+        # CSV temporal donde el subproceso guardará los resultados
+        tmp_csv = RAW_DIR / "ebsco_results.csv"
+        project_root = str(Path(__file__).resolve().parent.parent)
+
+        # Script Python que ejecuta el scraper
+        script = (
+            f"import sys; sys.path.insert(0, r'{project_root}'); "
+            f"from data_extraction.ebsco_scraper import EBSCOScraper; "
+            f"s = EBSCOScraper("
+            f"query=r'''{self.query}''', "
+            f"max_results={self.max_results}, "
+            f"headless=False); "
+            f"df = s.fetch(); "
+            f"df.to_csv(r'{str(tmp_csv)}', index=False, encoding='utf-8'); "
+            f"print(f'EBSCO_OK:{{len(df)}}')"
+        )
+
+        logger.info(
+            "Lanzando EBSCO scraper — se abrirá un navegador Chromium.\n"
+            "Si es la primera vez, inicie sesión con su cuenta Google institucional.\n"
+            "Los logs del scraper aparecerán aquí abajo:"
+        )
+
+        try:
+            # Popen: NO capturamos stderr para que los logs aparezcan en tiempo real.
+            # Sí capturamos stdout para leer el resultado final.
+            proc = subprocess.Popen(
+                [sys.executable, "-c", script],
+                stdout=subprocess.PIPE,
+                stderr=None,   # stderr va directo a la terminal de Streamlit
+                text=True,
+                cwd=project_root,
+            )
+
+            # Esperar a que termine (timeout de 10 minutos)
+            try:
+                stdout, _ = proc.communicate(timeout=600)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                logger.error(
+                    "EBSCO: Timeout de 10 minutos. "
+                    "¿Completó el login en el navegador?"
+                )
+                return pd.DataFrame(columns=STANDARD_COLUMNS)
+
+            if stdout and "EBSCO_OK:" in stdout:
+                count = stdout.strip().split("EBSCO_OK:")[-1]
+                logger.info(f"Subproceso EBSCO terminó: {count} registros.")
+
+            if proc.returncode != 0:
+                logger.error(f"EBSCO subproceso terminó con código {proc.returncode}")
+                return pd.DataFrame(columns=STANDARD_COLUMNS)
+
+            # Leer resultados
+            if tmp_csv.exists() and tmp_csv.stat().st_size > 0:
+                df = pd.read_csv(tmp_csv, encoding="utf-8")
+                logger.info(f"EBSCO: {len(df)} registros extraídos.")
+                return df
+
+            logger.warning("EBSCO: No se generaron resultados.")
+            return pd.DataFrame(columns=STANDARD_COLUMNS)
+
+        except Exception as e:
+            logger.error(f"Error en EBSCO subproceso: {e}")
+            import traceback
+            traceback.print_exc()
+            return pd.DataFrame(columns=STANDARD_COLUMNS)
 
 
 # ─── Ejecución directa ────────────────────────────────────────────────────────

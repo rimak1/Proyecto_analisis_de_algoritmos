@@ -327,6 +327,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### Fuentes de Datos")
     st.caption("Bases de datos — Biblioteca UniQ")
+    src_ebsco = st.checkbox("EBSCO Discovery (Conexion Directa)", value=False)
     src_acm = st.checkbox("ACM Digital Library", value=True)
     src_sage = st.checkbox("SAGE Journals", value=True)
     src_sd = st.checkbox("ScienceDirect (Elsevier)", value=True)
@@ -336,11 +337,18 @@ with st.sidebar:
     src_ss = st.checkbox("Semantic Scholar", value=False)
 
     selected_sources = []
+    if src_ebsco:    selected_sources.append("ebsco")
     if src_acm:      selected_sources.append("acm")
     if src_sage:     selected_sources.append("sage")
     if src_sd:       selected_sources.append("sciencedirect")
     if src_crossref: selected_sources.append("crossref")
     if src_ss:       selected_sources.append("semantic_scholar")
+
+    if src_ebsco:
+        st.warning(
+            "EBSCO abrira un navegador Chromium. "
+            "Si es la primera vez, debera iniciar sesion manualmente."
+        )
 
     if os.getenv("ELSEVIER_API_KEY", ""):
         st.success("Elsevier API key configurada")
@@ -453,9 +461,9 @@ with tabs[1]:
 
                 stats = dedup.duplication_stats()
                 status_box.success(
-                    f"Proceso completado: {stats['total_unique']} articulos unicos "
-                    f"| {stats['total_removed']} duplicados eliminados "
-                    f"({stats['removal_rate_pct']}%)"
+                    f"Proceso completado: {stats.get('total_unique', len(clean_df))} articulos unicos "
+                    f"| {stats.get('total_removed', len(dupes_df))} duplicados eliminados "
+                    f"({stats.get('removal_rate_pct', 0)}%)"
                 )
                 st.rerun()
 
