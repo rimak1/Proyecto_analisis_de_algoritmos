@@ -32,6 +32,10 @@ import pandas as pd
 try:
     from playwright.sync_api import sync_playwright, Page, BrowserContext
     PLAYWRIGHT_AVAILABLE = True
+    
+    # En entornos como Streamlit Cloud, Playwright necesita descargar el binario del navegador
+    # Ejecutamos playwright install chromium automatizadamente para asegurar que exista
+    os.system("playwright install chromium")
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
 
