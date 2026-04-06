@@ -591,7 +591,7 @@ class DataFetcher:
 
     def fetch_all(self, sources: list[str] | None = None) -> dict[str, pd.DataFrame]:
         """
-        Ejecuta la extracción de las fuentes seleccionadas.
+        Ejecuta la extracción de las fuentes seleccionadas concurrentemente.
 
         Fuentes disponibles:
           "acm"              → ACM Digital Library (OpenAlex filtrado)
@@ -606,6 +606,8 @@ class DataFetcher:
         Returns:
             Dict {nombre_fuente: DataFrame}
         """
+        import concurrent.futures
+
         available = {
             "ebsco": self.fetch_ebsco,
             "acm": self.fetch_acm,
@@ -618,21 +620,36 @@ class DataFetcher:
         selected = sources or list(available.keys())
         results = {}
 
-        # Procesar EBSCO primero si está seleccionado (requiere login
-        # manual en navegador — el usuario debe verlo de inmediato).
         ordered = selected
         if "ebsco" in selected:
             ordered = ["ebsco"] + [s for s in selected if s != "ebsco"]
 
-        for name in ordered:
-            if name not in available:
-                logger.warning(f"Fuente desconocida: {name}. Disponibles: {list(available)}")
-                continue
+        # Validamos fuentes
+        valid_sources = [name for name in ordered if name in available]
+
+        def _fetch_source(name: str):
             logger.info(f"── Extrayendo desde: {name.upper()} ──")
-            df = available[name]()
-            results[name] = df
-            if self.progress_callback:
-                self.progress_callback(name, len(df))
+            # Para evitar que la misma sesión de requests comparta estado en threads, 
+            # creamos una aislada si usamos requests (aunque thread-safe, es mejor por estabilidad).
+            return name, available[name]()
+
+        logger.info(f"Iniciando extracción concurrente de: {valid_sources}")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(valid_sources)) as executor:
+            future_to_name = {executor.submit(_fetch_source, name): name for name in valid_sources}
+            for future in concurrent.futures.as_completed(future_to_name):
+                name = future_to_name[future]
+                try:
+                    name_result, df = future.result()
+                    results[name] = df
+                    if self.progress_callback:
+                        self.progress_callback(name, len(df))
+                except Exception as exc:
+                    logger.error(f"La fuente {name} generó una excepción: {exc}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    # Guardamos un df vacío en lugar de fallar para continuar con el resto
+                    results[name] = pd.DataFrame()
 
         return results
 

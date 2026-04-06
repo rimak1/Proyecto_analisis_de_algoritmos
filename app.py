@@ -320,6 +320,15 @@ with st.sidebar:
         if DUPLICATES_CSV.exists():
             df_dup = pd.read_csv(DUPLICATES_CSV, encoding="utf-8")
             st.info(f"Duplicados eliminados: {len(df_dup)}")
+        
+        if st.button("Limpiar Dataset", type="primary", use_container_width=True):
+            if UNIFIED_CSV.exists(): UNIFIED_CSV.unlink()
+            if DUPLICATES_CSV.exists(): DUPLICATES_CSV.unlink()
+            from config import RAW_DIR
+            for f in RAW_DIR.glob("*_raw.csv"):
+                try: f.unlink()
+                except Exception: pass
+            st.rerun()
     else:
         df_main = pd.DataFrame()
         st.warning("Dataset no disponible. Vaya a Extraccion de Datos.")
@@ -479,7 +488,7 @@ with tabs[1]:
     with col_info:
         if UNIFIED_CSV.exists():
             st.dataframe(
-                pd.read_csv(UNIFIED_CSV).head(20),
+                pd.read_csv(UNIFIED_CSV),
                 width='stretch',
                 height=300,
             )
@@ -488,7 +497,7 @@ with tabs[1]:
         st.markdown("---")
         st.markdown("#### Registro de Duplicados Eliminados")
         df_dup = pd.read_csv(DUPLICATES_CSV)
-        st.dataframe(df_dup.head(50), width='stretch', height=250)
+        st.dataframe(df_dup, width='stretch', height=250)
         st.download_button(
             "Descargar duplicados (CSV)",
             df_dup.to_csv(index=False).encode(),
