@@ -106,10 +106,12 @@ class DataFetcher:
         query: str = DEFAULT_QUERY,
         max_results: int = MAX_RESULTS_PER_SOURCE,
         progress_callback=None,
+        reset_ebsco: bool = False,
     ):
         self.query = query
         self.max_results = max_results
         self.progress_callback = progress_callback
+        self.reset_ebsco = reset_ebsco
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": "BibliometricsAnalyzer/1.0 (UniQuindio academic-research)"
@@ -605,10 +607,10 @@ class DataFetcher:
             Dict {nombre_fuente: DataFrame}
         """
         available = {
+            "ebsco": self.fetch_ebsco,
             "acm": self.fetch_acm,
             "sage": self.fetch_sage,
             "sciencedirect": self.fetch_sciencedirect,
-            "ebsco": self.fetch_ebsco,
             "crossref": self.fetch_crossref,
             "semantic_scholar": self.fetch_semantic_scholar,
         }
@@ -616,7 +618,13 @@ class DataFetcher:
         selected = sources or list(available.keys())
         results = {}
 
-        for name in selected:
+        # Procesar EBSCO primero si está seleccionado (requiere login
+        # manual en navegador — el usuario debe verlo de inmediato).
+        ordered = selected
+        if "ebsco" in selected:
+            ordered = ["ebsco"] + [s for s in selected if s != "ebsco"]
+
+        for name in ordered:
             if name not in available:
                 logger.warning(f"Fuente desconocida: {name}. Disponibles: {list(available)}")
                 continue
@@ -676,7 +684,8 @@ class DataFetcher:
             f"s = EBSCOScraper("
             f"query=r'''{self.query}''', "
             f"max_results={self.max_results}, "
-            f"headless=False); "
+            f"headless=False, "
+            f"reset_session={self.reset_ebsco}); "
             f"df = s.fetch(); "
             f"df.to_csv(r'{str(tmp_csv)}', index=False, encoding='utf-8'); "
             f"print(f'EBSCO_OK:{{len(df)}}')"

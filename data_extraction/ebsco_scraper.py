@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -73,6 +74,7 @@ class EBSCOScraper:
         max_results: int = MAX_RESULTS_PER_SOURCE,
         headless: bool = False,
         progress_callback=None,
+        reset_session: bool = False,
     ):
         if not PLAYWRIGHT_AVAILABLE:
             raise ImportError(
@@ -84,6 +86,15 @@ class EBSCOScraper:
         self.max_results = max_results
         self.headless = headless
         self.progress_callback = progress_callback
+        self.reset_session = reset_session
+
+        # Limpiar sesión anterior si se solicita
+        if self.reset_session and SESSION_DIR.exists():
+            try:
+                shutil.rmtree(SESSION_DIR)
+                logger.info("Sesión de EBSCO eliminada (reset_session=True)")
+            except Exception as e:
+                logger.warning(f"No se pudo eliminar la sesión: {e}")
 
         SESSION_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -118,26 +129,46 @@ class EBSCOScraper:
 
     # ── Detección de estado ────────────────────────────────────────────────────
 
+    # URLs que indican que estamos en un muro de login ACTIVO (esperando credenciales)
+    _LOGIN_INDICATORS = [
+        "login.intelproxy.com/v2/inicio",    # Landing del proxy
+        "accounts.google.com/",              # Login de Google
+        "login.ebsco.com",                   # Login directo EBSCO
+        "login.microsoftonline.com",         # Login Microsoft
+        "myaccount.google.com",              # Verificación Google
+    ]
+
     def _is_on_ebsco(self, page: Page) -> bool:
         """Detecta si estamos en el dominio de EBSCO (resultados)."""
         url = page.url.lower()
-        return (
-            "research-ebsco-com" in url
-            or ("ebscohost.com" in url and "login.ebsco" not in url)
-            or "/search/results" in url
-        )
+        # Patrones directos de EBSCO
+        if "research-ebsco-com" in url:
+            return True
+        if "research.ebsco.com" in url:
+            return True
+        if "eds.p.ebscohost.com" in url:
+            return True
+        if "eds.s.ebscohost.com" in url:
+            return True
+        if "ebscohost.com" in url and "login.ebsco" not in url:
+            return True
+        if "/search/results" in url and "ebsco" in url:
+            return True
+        # Proxy ya redirigió al resultado final
+        if "referencistas.com" in url and "login" not in url:
+            return True
+        return False
+
+    def _is_on_login_page(self, page: Page) -> bool:
+        """Detecta si estamos en un muro de autenticación activo."""
+        url = page.url.lower()
+        return any(indicator in url for indicator in self._LOGIN_INDICATORS)
 
     def _needs_login(self, page: Page) -> bool:
         """Detecta si estamos en un muro de autenticación REAL."""
-        url = page.url.lower()
         if self._is_on_ebsco(page):
             return False
-        login_indicators = [
-            "login.intelproxy.com/v2/inicio",
-            "accounts.google.com",
-            "login.ebsco.com",
-        ]
-        return any(indicator in url for indicator in login_indicators)
+        return self._is_on_login_page(page)
 
     # ── Manejo de login y redirects ────────────────────────────────────────────
 
@@ -160,12 +191,24 @@ class EBSCOScraper:
                     return "login"
             except Exception:
                 pass
-            time.sleep(1)
+            page.wait_for_timeout(1000)
         logger.warning(f"Redirect no resuelto en {timeout_seconds}s. URL: {page.url[:80]}")
         return "unknown"
 
     def _wait_for_manual_login(self, page: Page, timeout_seconds: int = 300) -> bool:
-        """Espera a que el usuario complete el login manualmente."""
+        """
+        Espera a que el usuario complete el login y EBSCO cargue.
+        
+        Solo retorna True cuando _is_on_ebsco() detecta que estamos
+        en la página de resultados de EBSCO. Sin atajos ni detección
+        indirecta — esperamos a estar realmente en EBSCO.
+        """
+        # Traer el navegador al frente
+        try:
+            page.bring_to_front()
+        except Exception:
+            pass
+
         logger.info(
             "\n"
             "╔══════════════════════════════════════════════════════════════╗\n"
@@ -182,16 +225,29 @@ class EBSCOScraper:
             timeout_seconds,
         )
         start = time.time()
+        seen_urls = set()
+        
         while time.time() - start < timeout_seconds:
             try:
-                # Revisar TODAS las páginas del contexto (el login puede abrir tabs nuevas)
                 for ctx_page in page.context.pages:
+                    try:
+                        current_url = ctx_page.url
+                    except Exception:
+                        continue
+
+                    # Logear URL cuando es nueva (para diagnóstico)
+                    if current_url not in seen_urls:
+                        elapsed = int(time.time() - start)
+                        logger.info(f"[{elapsed}s] Tab URL: {current_url[:120]}")
+                        seen_urls.add(current_url)
+
                     if self._is_on_ebsco(ctx_page):
-                        logger.info("Login exitoso. Ahora en EBSCO.")
+                        logger.info(f"Login exitoso — EBSCO detectado: {current_url[:100]}")
                         return True
-            except Exception:
-                pass
-            time.sleep(3)
+            except Exception as e:
+                logger.debug(f"Error polling: {e}")
+            page.wait_for_timeout(2000)
+
         logger.error("Timeout: No se completó el login en %d segundos.", timeout_seconds)
         return False
 
@@ -478,6 +534,35 @@ class EBSCOScraper:
         logger.info("No hay más resultados para cargar.")
         return False
 
+    # ── Espera post-login ─────────────────────────────────────────────────────
+
+    def _wait_for_ebsco_page(
+        self, context: "BrowserContext", fallback_page: "Page", timeout: int = 60
+    ) -> "Page":
+        """
+        Después del login, espera a que alguna tab del contexto esté en EBSCO.
+
+        El proxy IntelProxy redirecciona varias veces: callback → CRAI → EBSCO.
+        Esta función espera activamente hasta que la página EBSCO aparezca.
+        """
+        logger.info("Esperando a que EBSCO cargue tras login...")
+        start = time.time()
+        while time.time() - start < timeout:
+            for ctx_page in context.pages:
+                try:
+                    if self._is_on_ebsco(ctx_page):
+                        logger.info(f"EBSCO encontrado: {ctx_page.url[:100]}")
+                        return ctx_page
+                except Exception:
+                    continue
+            fallback_page.wait_for_timeout(2000)
+        # Si no se encontró, intentar con la página actual (quizá cargó tarde)
+        logger.warning(
+            f"No se encontró EBSCO tras {timeout}s. "
+            f"Usando página actual: {fallback_page.url[:80]}"
+        )
+        return fallback_page
+
     # ── Flujo principal ───────────────────────────────────────────────────────
 
     def fetch(self) -> pd.DataFrame:
@@ -529,24 +614,17 @@ class EBSCOScraper:
                         logger.error("No se completó el login. Abortando.")
                         context.close()
                         return pd.DataFrame(columns=STANDARD_COLUMNS)
-                    # Después del login, puede que estemos en otra página.
-                    # Buscar la página que tiene EBSCO
-                    for ctx_page in context.pages:
-                        if self._is_on_ebsco(ctx_page):
-                            page = ctx_page
-                            break
+                    # Después del login, esperar a que EBSCO cargue en alguna tab
+                    page = self._wait_for_ebsco_page(context, page)
                 elif state == "unknown":
                     logger.info("Estado desconocido. Esperando 10s...")
-                    time.sleep(10)
+                    page.wait_for_timeout(10000)
                     if not self._is_on_ebsco(page):
                         login_ok = self._wait_for_manual_login(page, timeout_seconds=300)
                         if not login_ok:
                             context.close()
                             return pd.DataFrame(columns=STANDARD_COLUMNS)
-                        for ctx_page in context.pages:
-                            if self._is_on_ebsco(ctx_page):
-                                page = ctx_page
-                                break
+                        page = self._wait_for_ebsco_page(context, page)
 
                 # En EBSCO → esperar resultados
                 logger.info(f"En EBSCO. URL: {page.url[:80]}")
@@ -586,7 +664,7 @@ class EBSCOScraper:
 
                     if not self._load_more_results(page):
                         break
-                    time.sleep(2)
+                    page.wait_for_timeout(2000)
 
             except Exception as e:
                 logger.error(f"Error durante scraping EBSCO: {e}")
@@ -594,7 +672,10 @@ class EBSCOScraper:
                 traceback.print_exc()
 
             finally:
-                context.close()
+                try:
+                    context.close()
+                except Exception:
+                    pass  # Navegador ya cerrado
 
         all_records = all_records[:self.max_results]
         df = pd.DataFrame(all_records, columns=STANDARD_COLUMNS)

@@ -349,6 +349,11 @@ with st.sidebar:
             "EBSCO abrira un navegador Chromium. "
             "Si es la primera vez, debera iniciar sesion manualmente."
         )
+        reset_ebsco = st.checkbox(
+            "Forzar nuevo inicio de sesion (limpiar cache)", value=True
+        )
+    else:
+        reset_ebsco = False
 
     if os.getenv("ELSEVIER_API_KEY", ""):
         st.success("Elsevier API key configurada")
@@ -434,7 +439,7 @@ with tabs[1]:
     col_run, col_info = st.columns([1, 2])
 
     with col_run:
-        if st.button("Iniciar Extraccion Completa", type="primary", use_container_width=True):
+        if st.button("Iniciar Extraccion Completa", type="primary", width='stretch'):
             if not selected_sources:
                 st.error("Seleccione al menos una fuente en el panel lateral.")
             else:
@@ -444,7 +449,11 @@ with tabs[1]:
                 status_box = st.empty()
 
                 status_box.info("Extrayendo desde las fuentes seleccionadas...")
-                fetcher = DataFetcher(query=query, max_results=max_results)
+                fetcher = DataFetcher(
+                    query=query,
+                    max_results=max_results,
+                    reset_ebsco=reset_ebsco,
+                )
                 dfs = fetcher.fetch_all(sources=selected_sources)
                 fetcher.save_raw(dfs)
                 prog.progress(40)
@@ -471,7 +480,7 @@ with tabs[1]:
         if UNIFIED_CSV.exists():
             st.dataframe(
                 pd.read_csv(UNIFIED_CSV).head(20),
-                use_container_width=True,
+                width='stretch',
                 height=300,
             )
 
@@ -479,7 +488,7 @@ with tabs[1]:
         st.markdown("---")
         st.markdown("#### Registro de Duplicados Eliminados")
         df_dup = pd.read_csv(DUPLICATES_CSV)
-        st.dataframe(df_dup.head(50), use_container_width=True, height=250)
+        st.dataframe(df_dup.head(50), width='stretch', height=250)
         st.download_button(
             "Descargar duplicados (CSV)",
             df_dup.to_csv(index=False).encode(),
@@ -580,7 +589,7 @@ with tabs[2]:
                 font_color=TEXT_PRIMARY,
                 plot_bgcolor="white",
             )
-            st.plotly_chart(fig_heat, use_container_width=True)
+            st.plotly_chart(fig_heat, width='stretch')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -625,8 +634,8 @@ with tabs[3]:
                     yaxis=dict(autorange="reversed"),
                     showlegend=False,
                 )
-                st.plotly_chart(fig_freq, use_container_width=True)
-                st.dataframe(freq_df, use_container_width=True, height=300)
+                st.plotly_chart(fig_freq, width='stretch')
+                st.dataframe(freq_df, width='stretch', height=300)
                 st.session_state["freq_df"] = freq_df
 
         with col_extract:
@@ -649,7 +658,7 @@ with tabs[3]:
                         "rank", "keyword", "fused_score",
                         "precision_score", "precision_grade", "extractors_count",
                     ]],
-                    use_container_width=True,
+                    width='stretch',
                     height=350,
                 )
 
@@ -708,7 +717,7 @@ with tabs[4]:
                     "method", "cophenetic_correlation", "silhouette_score",
                     "calinski_harabasz", "composite_score", "rank", "best",
                 ]],
-                use_container_width=True,
+                width='stretch',
             )
             st.success(f"Mejor algoritmo recomendado: **{best.upper()}**")
             st.session_state["cluster_eval_df"] = eval_df
@@ -720,13 +729,13 @@ with tabs[4]:
                     fig_dend = hc.plot_dendrogram(
                         linkage_mats[method], method, n_clusters=n_clusters
                     )
-                    st.pyplot(fig_dend, use_container_width=True)
+                    st.pyplot(fig_dend, width='stretch')
                     plt.close(fig_dend)
 
             st.markdown("#### Asignacion de Articulos por Cluster")
             best_Z = linkage_mats[best]
             cluster_summary = hc.get_cluster_summary(best_Z, best, n_clusters=n_clusters)
-            st.dataframe(cluster_summary, use_container_width=True, height=300)
+            st.dataframe(cluster_summary, width='stretch', height=300)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -764,10 +773,10 @@ with tabs[5]:
                 font_color=TEXT_PRIMARY,
                 plot_bgcolor=SURFACE_COLOR,
             )
-            st.plotly_chart(fig_map, use_container_width=True)
+            st.plotly_chart(fig_map, width='stretch')
 
             counts = ghm.get_country_counts()
-            st.dataframe(counts.head(20), use_container_width=True)
+            st.dataframe(counts.head(20), width='stretch')
             st.session_state["heatmap_fig"] = fig_map
 
         # ── Nube de Palabras ──────────────────────────────────────────────────
@@ -788,7 +797,7 @@ with tabs[5]:
                             include_keywords=include_kw,
                             background_color=SURFACE_COLOR,
                         )
-                        st.pyplot(fig_wc, use_container_width=True)
+                        st.pyplot(fig_wc, width='stretch')
                         st.session_state["wordcloud_fig"] = fig_wc
                     except Exception as e:
                         st.error(f"Error al generar la nube de palabras: {e}")
@@ -824,7 +833,7 @@ with tabs[5]:
                 plot_bgcolor=SURFACE_COLOR,
                 font_color=TEXT_PRIMARY,
             )
-            st.plotly_chart(fig_timeline, use_container_width=True)
+            st.plotly_chart(fig_timeline, width='stretch')
 
             fig_journals = tl.plot_journal_comparison()
             fig_journals.update_layout(
@@ -832,7 +841,7 @@ with tabs[5]:
                 plot_bgcolor=SURFACE_COLOR,
                 font_color=TEXT_PRIMARY,
             )
-            st.plotly_chart(fig_journals, use_container_width=True)
+            st.plotly_chart(fig_journals, width='stretch')
             st.session_state["timeline_fig"] = fig_timeline
 
         # ── Exportar PDF ──────────────────────────────────────────────────────
@@ -848,7 +857,7 @@ with tabs[5]:
             - Evaluacion de clustering (si fue calculado)
             """)
 
-            if st.button("Generar PDF", type="primary", use_container_width=True):
+            if st.button("Generar PDF", type="primary", width='stretch'):
                 from visualization import ReportExporter
 
                 stats = {
