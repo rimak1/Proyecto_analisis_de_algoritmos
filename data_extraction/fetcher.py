@@ -694,14 +694,18 @@ class DataFetcher:
         tmp_csv = RAW_DIR / "ebsco_results.csv"
         project_root = str(Path(__file__).resolve().parent.parent)
 
-        # Script Python que ejecuta el scraper
+        # Determinar si estamos en un servidor sin entorno gráfico (ej. Streamlit Cloud)
+        import sys
+        import os
+        is_headless = "True" if sys.platform.startswith("linux") and not os.environ.get("DISPLAY") else "False"
+
         script = (
             f"import sys; sys.path.insert(0, r'{project_root}'); "
             f"from data_extraction.ebsco_scraper import EBSCOScraper; "
             f"s = EBSCOScraper("
             f"query=r'''{self.query}''', "
             f"max_results={self.max_results}, "
-            f"headless=False, "
+            f"headless={is_headless}, "
             f"reset_session={self.reset_ebsco}); "
             f"df = s.fetch(); "
             f"df.to_csv(r'{str(tmp_csv)}', index=False, encoding='utf-8'); "
